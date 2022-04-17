@@ -1,6 +1,6 @@
-Package: KlineFlow
+Package: afterflow
 Type: Package
-Title: Kline Likes Industrious N Enterprising F(el)low(s)
+Title: Processing FlowJo output
 Version: 0.1.0
 Author@R:
     person("Jovian", "Yu", , "jovian.yu@gmail.com", role = c("aut", "cre"),
@@ -10,8 +10,21 @@ License: MIT
 Encoding: UTF-8
 LazyData: true
 Imports: 
-    boxrdrive,
     dplyr,
-    ggplot2
-Remotes: r-box/boxrdrive
+    ggplot2,
+    stringr,
+    tidyr,
+    data.table,
+    BiocManager,
+    flowCore,
+    flowWorkspace,
+    cyCombine
+Remotes:
+    RGLab/cytoverse
+    biosurf/cyCombine
 RoxygenNote: 7.1.2
+Collate: 
+    'package-functions.R'
+    'afterflow-class.R'
+    'fcs-functions.R'
+    'filehandler-class.R'
