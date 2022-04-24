@@ -572,6 +572,8 @@ afterflow_data <- function(af) {
 #' Gets the active MFI values with the existing metadata
 #'
 #' @param af AfterFlow object
+#' @param cv Covariate for batch correction (optional)
+#' @param verbose Boolean for verbose message printing, default TRUE
 #'
 #' @return AfterFlow object
 #' @importFrom cyCombine batch_correct
@@ -581,29 +583,121 @@ afterflow_data <- function(af) {
 #' afterflow_data(af) -> returns a current data
 
 afterflowset_batch <- function(af, cv = NULL, verbose = TRUE) {
-
-  #'   tib_fcs_corrected <- cyCombine::correct_data(
-  #'     tib_fcs,
-  #'     cyCombine::create_som(
-  #'       cyCombine::normalize(
-  #'         tib_fcs,
-  #'         markers = markers_include,
-  #'         norm_method = "scale"
-  #'       ),
-  #'       markers = markers_include,
-  #'       seed = seed
-  #'     ),
-  #'     covar = batch_covar,
-  #'     markers = markers_include
-  #'   )
-
-
   afterflow_check(af)
   data <- afterflow_data(af)
   markers_include = names(afterflow_markers(af, TRUE))
   data <- batch_correct(data, markers = markers_include,
+                        norm_method = "scale",
                         seed = af@seed, covar = cv)
+  af@batch_covar <- ifelse(is.null(cv), character(), cv)
+  af@batch_bool <- TRUE
   return(afterflow_set_expr(af, data, verbose))
+}
+
+#' @title AfterFlowSet Dimensional Reduction
+#'
+#' @description
+#' Clustering using FlowSOM
+#'
+#' @param af AfterFlow object
+#' @param method Method for dimensional reduction, default umap
+#' @param verbose Boolean for verbose message printing, default TRUE
+#'
+#' @return AfterFlow object
+#' @importFrom uwot umap
+#' @importFrom Rtsne Rtsne
+#' @export
+#'
+#' @examples
+#' afterflow_data(af) -> returns a current data
+
+afterflow_dimred <- function(af, method = "umap", verbose = TRUE) {
+  afterflow_check(af)
+  mat <- exprs(af)
+  if (method == "umap") {
+    if (verbose)
+      show_message("Calculating UMAP")
+    umap.out <- umap(
+      exprs(af)[names(afterflow_markers(af, filtered = TRUE))],
+      verbose = verbose
+    )
+    af@metadata[["UMAP_1"]] <- umap.out[,1]
+    af@metadata[["UMAP_2"]] <- umap.out[,2]
+    if (verbose)
+      show_message("Completed calculating UMAP")
+  } else if (method == "tsne") {
+    if (verbose)
+      show_message("Calculating tSNE")
+    tsne.obj <- Rtsne(
+      exprs(af)[names(afterflow_markers(af, filtered = TRUE))],
+      num_threads = 0,
+      verbose = verbose
+    )
+    af@metadata[["tSNE_1"]] <- tsne.obj$Y[,1]
+    af@metadata[["tSNE_2"]] <- tsne.obj$Y[,2]
+    if (verbose)
+      show_message("Completed calculating tSNE")
+  } else {
+    show_message("Invalid dimensional reduction method", method, final = "stop")
+  }
+  af@dimred <- c(af@dimred, method)
+  return(af)
+}
+
+#' @title AfterFlowSet Clustering
+#'
+#' @description
+#' Clustering using FlowSOM
+#'
+#' @param af AfterFlow object
+#' @param verbose Boolean for verbose message printing, default TRUE
+#'
+#' @return AfterFlow object
+#' @importFrom FlowSOM FlowSOM GetMetaclusters
+#' @export
+#'
+#' @examples
+#' afterflow_data(af) -> returns a current data
+
+afterflow_cluster <- function(af, verbose = TRUE) {
+  afterflow_check(af)
+  flowsom <- FlowSOM::FlowSOM(
+    flowCore::flowSet(af@fcs_active),
+    colsToUse = names(afterflow_markers(af, filtered = TRUE)),
+    maxMeta = 50,
+    silent = !verbose
+  )
+  af@metadata[["cluster.id"]] <- GetMetaclusters(flowsom)
+  af@metadata[["som.value"]] <- flowsom$map$mapping[, 2]
+  af@clust <- "FlowSOM"
+  return(af)
+}
+
+
+#' @title AfterFlowSet Filter
+#'
+#' @description
+#' Filtering using FlowSOM
+#'
+#' @param af AfterFlow object
+#' @param meta Metavariable
+#' @param value Value to filter on
+#' @param verbose Boolean for verbose message printing, default TRUE
+#'
+#' @return AfterFlow object
+#' @importFrom dplyr filter
+#' @export
+#'
+#' @examples
+#' afterflow_data(af) -> returns a current data
+
+afterflow_filter <- function(af, meta, value, verbose = TRUE) {
+  afterflow_check(af)
+  data <- afterflow_data(af)
+  if (verbose)
+    show_message("Filtering", sprintf("%s = \'%s\'", meta, value))
+  af@metadata <- af@metadata[af@metadata[[meta]] == value, ]
+  return(afterflow_set_expr(af, data[data[[meta]] == value, ], verbose))
 }
 
 #' @title AfterFlow Set MFIs
@@ -616,6 +710,7 @@ afterflowset_batch <- function(af, cv = NULL, verbose = TRUE) {
 #'
 #' @return AfterFlow object
 #' @importFrom cyCombine batch_correct
+#' @importFrom dplyr filter
 #' @export
 #'
 #' @examples
@@ -630,6 +725,10 @@ afterflow_set_expr <- function(af, expr, verbose = TRUE) {
                  final = "stop")
 
   fcs_assign <- function(fcs, mfi) {
+    if (nrow(mfi) == 0)
+      return(NULL)
+    if (nrow(mfi) < nrow(fcs@exprs))
+      fcs@exprs <- fcs@exprs[1:nrow(mfi), ]
     for (marker in markers)
       fcs@exprs[, marker] <- mfi[[marker]]
     return(fcs)
@@ -642,9 +741,10 @@ afterflow_set_expr <- function(af, expr, verbose = TRUE) {
     af@fcs_active <- lapply(
       exps,
       function(expt)
-        fcs_assign(af@fcs_active[[expt]], dplyr::filter(expr, exp == expt))
+        fcs_assign(af@fcs_active[[expt]], filter(expr, exp == expt))
     )
     names(af@fcs_active) <- exps
+    af@fcs_active[sapply(af@fcs_active, is.null)] <- NULL
   }
 
   return(af)

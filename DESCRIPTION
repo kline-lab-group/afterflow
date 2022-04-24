@@ -28,3 +28,4 @@ Collate:
     'afterflow-class.R'
     'fcs-functions.R'
     'filehandler-class.R'
+    'figure-functions.R'
